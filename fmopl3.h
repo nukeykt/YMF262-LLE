@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdint.h>
+
 typedef struct
 {
     int mclk;
@@ -165,6 +167,13 @@ typedef struct
     int pan[2];
     int connect_pair[2];
 
+    int64_t ra_dbg1[2];
+    int ra_dbg2[2];
+    int ra_dbg_load[2];
+
+    int fb_l[2][2];
+    int pan_l[2][2];
+
     int write0_sr;
     int write0_l[4];
     int write0;
@@ -200,6 +209,42 @@ typedef struct
     int pg_cells[36];
     int pg_out_rhy;
 
+    int trem_load_l;
+    int trem_load;
+    int trem_st_load_l;
+    int trem_st_load;
+    int trem_carry[2];
+    int trem_value[2];
+    int trem_dir[2];
+    int trem_step;
+    int trem_out;
+    int trem_of[2];
+
+    int eg_load_l1[2];
+    int eg_load_l;
+    int eg_load;
+
+    int64_t eg_timer_masked[2];
+    int eg_carry[2];
+    int eg_mask[2];
+    int eg_subcnt[2];
+    int eg_subcnt_l[2];
+    int eg_sync_l[2];
+    int eg_timer_low;
+    int eg_shift;
+    int eg_timer_dbg[2];
+
+    int eg_timer_i;
+    int eg_timer_o[4];
+    int eg_state_o[4];
+    int eg_level_o[4];
+    int eg_index[2];
+    int eg_cells[36];
+
+    int eg_out[2];
+    int eg_dbg[2];
+    int eg_dbg_load_l[2];
+
     int hh_load;
     int tc_load;
     int hh_bit2;
@@ -209,9 +254,47 @@ typedef struct
     int tc_bit3;
     int tc_bit5;
 
-    int tm_w1;
-    int tm_w2;
-    int tm_w3;
-    int tm_w4;
+    int op_logsin[2];
+    int op_saw[2];
+    int op_saw_phase[2];
+    int op_shift[2];
+    int op_pow[2];
+    int op_mute[2];
+    int op_sign[2];
+    int op_fb[4][13][2];
+
+    int op_value;
+
+    int accm_a[2];
+    int accm_b[2];
+    int accm_c[2];
+    int accm_d[2];
+    int accm_shift_a[2];
+    int accm_shift_b[2];
+    int accm_shift_c[2];
+    int accm_shift_d[2];
+    int accm_load_ac_l;
+    int accm_load_ac;
+    int accm_load_bd_l;
+    int accm_load_bd;
+    int accm_a_of;
+    int accm_a_sign;
+    int accm_b_of;
+    int accm_b_sign;
+    int accm_c_of;
+    int accm_c_sign;
+    int accm_d_of;
+    int accm_d_sign;
+
+    int o_doab;
+    int o_docd;
+    int o_sy;
+    int o_smpac;
+    int o_smpbd;
+    int o_irq_pull;
+    int o_test;
+
+    int data_o;
+    int data_z;
 } fmopl3_t;
 

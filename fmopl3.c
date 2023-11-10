@@ -1,30 +1,17 @@
 #include "fmopl3.h"
 
 
-static const int ch_map[32] = {
-    0, 1, 2, -1,
-    3, 4, 5, -1,
-    6, 7, 8, -1,
-    -1, -1, -1, -1,
-    9, 10, 11, -1,
-    12, 13, 14, -1,
-    15, 16, 17, -1,
-    -1, -1, -1, -1
-};
-
-static const int op_map[64] = {
-    0, 1, 2, 3, 4, 5, -1, -1,
-    6, 7, 8, 9, 10, 11, -1, -1,
-    12, 13, 14, 15, 16, 17, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1,
-    18, 19, 20, 21, 22, 23, -1, -1,
-    24, 25, 26, 27, 28, 29, -1, -1,
-    30, 31, 32, 33, 34, 35, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1
+enum {
+    eg_state_attack = 0,
+    eg_state_decay,
+    eg_state_sustain,
+    eg_state_release
 };
 
 void FMOPL3_Clock(fmopl3_t *chip)
 {
+    int i;
+
     chip->mclk1 = !chip->input.mclk;
     chip->mclk2 = chip->input.mclk;
 
@@ -271,6 +258,28 @@ void FMOPL3_Clock(fmopl3_t *chip)
 
         if (chip->ra_write || chip->clk1)
         {
+            static const int ch_map[32] = {
+                0, 1, 2, -1,
+                3, 4, 5, -1,
+                6, 7, 8, -1,
+                -1, -1, -1, -1,
+                9, 10, 11, -1,
+                12, 13, 14, -1,
+                15, 16, 17, -1,
+                -1, -1, -1, -1
+            };
+
+            static const int op_map[64] = {
+                0, 1, 2, 3, 4, 5, -1, -1,
+                6, 7, 8, 9, 10, 11, -1, -1,
+                12, 13, 14, 15, 16, 17, -1, -1,
+                -1, -1, -1, -1, -1, -1, -1, -1,
+                18, 19, 20, 21, 22, 23, -1, -1,
+                24, 25, 26, 27, 28, 29, -1, -1,
+                30, 31, 32, 33, 34, 35, -1, -1,
+                -1, -1, -1, -1, -1, -1, -1, -1
+            };
+
             int bank = (chip->ra_address_latch & 0x100) != 0;
             int op_address = chip->ra_write_a ? ((chip->ra_address_latch & 0x1f) | (bank << 5)) : chip->ra_cnt;
             int idx = op_map[op_address];
@@ -462,6 +471,25 @@ void FMOPL3_Clock(fmopl3_t *chip)
             chip->connect_pair[1] = chip->connect_pair[0];
             chip->fb[1] = chip->fb[0];
         }
+    }
+
+    if (chip->clk1)
+    {
+        chip->connect_l[0] = (chip->connect_l[1] << 1) | chip->connect[1];
+        chip->connect_pair_l[0] = (chip->connect_pair_l[1] << 1) | chip->connect_pair[1];
+        chip->fb_l[0][0] = chip->fb[1];
+        chip->fb_l[1][0] = chip->fb_l[0][1];
+        chip->pan_l[0][0] = chip->pan[1];
+        chip->pan_l[1][0] = chip->pan_l[0][1];
+    }
+    if (chip->clk2)
+    {
+        chip->connect_l[1] = chip->connect_l[0];
+        chip->connect_pair_l[1] = chip->connect_pair_l[0];
+        chip->fb_l[0][1] = chip->fb_l[0][0];
+        chip->fb_l[1][1] = chip->fb_l[1][0];
+        chip->pan_l[0][1] = chip->pan_l[0][0];
+        chip->pan_l[1][1] = chip->pan_l[1][0];
     }
     
     {
@@ -659,6 +687,355 @@ void FMOPL3_Clock(fmopl3_t *chip)
         || ((chip->rh_sel[1] & 8) != 0 && (chip->reg_rh_kon & 8) != 0) // sd
         || ((chip->rh_sel[1] & 16) != 0 && (chip->reg_rh_kon & 2) != 0); // tc
 
+
+    if (chip->clk1)
+    {
+        chip->trem_load_l = chip->fsm_out[0];
+        chip->trem_st_load_l = chip->fsm_out[6];
+        chip->eg_load_l = chip->eg_load_l1[1];
+    }
+    chip->trem_load = !chip->trem_load_l && chip->fsm_out[0];
+    chip->trem_st_load = !chip->trem_st_load_l && chip->fsm_out[6];
+    chip->eg_load = !chip->eg_load_l && chip->eg_load_l1[1];
+
+    {
+        if (chip->trem_st_load)
+            chip->trem_step = chip->am_step;
+        if (chip->trem_load)
+            chip->trem_out = chip->trem_value[1] & 127;
+
+        if (chip->clk1)
+        {
+            int bit = chip->trem_value[1] & 1;
+            int reset = chip->reset1 || (chip->reg_test0 & 2) != 0;
+
+            int step = ((chip->trem_step || (chip->reg_test0 & 16) != 0) && (chip->fsm_out[0] || chip->trem_dir[1]))
+                && chip->fsm_out[7];
+            int carry = chip->fsm_out[7] && chip->trem_carry[1];
+
+            bit += step + carry;
+
+            int of = (chip->trem_out == 0) || (chip->trem_out & 105) == 105;
+
+            chip->trem_carry[0] = (bit & 2) != 0;
+            chip->trem_value[0] = (chip->trem_value[1] >> 1) & 255;
+            if (!reset)
+                chip->trem_value[0] |= (bit & 1) << 8;
+            chip->trem_of[0] = of;
+
+            if (reset)
+                chip->trem_dir[0] = 0;
+            else
+                chip->trem_dir[0] = chip->trem_dir[1] ^ (of && !chip->trem_of[1]);
+        }
+        if (chip->clk2)
+        {
+            chip->trem_carry[1] = chip->trem_carry[0];
+            chip->trem_value[1] = chip->trem_value[0];
+            chip->trem_of[1] = chip->trem_of[0];
+            chip->trem_dir[1] = chip->trem_dir[0];
+        }
+    }
+
+    {
+
+        if (chip->reset1)
+        {
+            chip->eg_timer_low = 0;
+            chip->eg_shift = 0;
+        }
+        else if (chip->eg_load)
+        {
+            chip->eg_timer_low = chip->eg_timer_o[3] | (chip->eg_timer_o[1] << 1);
+            chip->eg_shift = 0;
+            if (chip->eg_timer_masked[1] & 0x1555)
+                chip->eg_shift |= 1;
+            if (chip->eg_timer_masked[1] & 0x666)
+                chip->eg_shift |= 2;
+            if (chip->eg_timer_masked[1] & 0x1878)
+                chip->eg_shift |= 4;
+            if (chip->eg_timer_masked[1] & 0x1f80)
+                chip->eg_shift |= 8;
+        }
+
+        if (chip->clk1)
+        {
+            int bit = chip->eg_timer_o[3];
+            int bit2;
+            int carry = chip->eg_carry[1] || (chip->eg_subcnt[1] && chip->eg_sync_l[1]);
+            bit += carry;
+
+            int rst = chip->reset1 || (chip->reg_test1 & 8) != 0;
+
+            if (rst)
+                bit2 = 0;
+            else
+                bit2 = bit & 1;
+
+            chip->eg_timer_i = bit2;
+            chip->eg_carry[0] = (bit & 2) != 0;
+            chip->eg_sync_l[0] = chip->fsm_out[6];
+            chip->eg_mask[0] = (rst || chip->fsm_out[6]) ? 0 :
+                (chip->eg_mask[1] || bit2);
+            chip->eg_timer_masked[0] = (chip->eg_timer_masked[1] >> 1) & 0x7ffffffffLL;
+            if (!chip->eg_mask[1])
+                chip->eg_timer_masked[0] |= ((int64_t)bit2) << 35;
+            if (!chip->eg_timer_dbg[1] && (chip->reg_test0 & 64) != 0)
+                chip->eg_timer_masked[0] |= 1LL << 35;
+
+            if (chip->reset1)
+                chip->eg_subcnt[0] = 0;
+            else
+                chip->eg_subcnt[0] = chip->eg_subcnt[1] ^ chip->fsm_out[6];
+
+            chip->eg_load_l1[0] = chip->eg_subcnt[1] && chip->fsm_out[6];
+
+            chip->eg_timer_dbg[0] = (chip->reg_test0 & 64) != 0;
+        }
+        if (chip->clk2)
+        {
+            chip->eg_timer[1] = chip->eg_timer[0];
+            chip->eg_carry[1] = chip->eg_carry[0];
+            chip->eg_sync_l[1] = chip->eg_sync_l[0];
+            chip->eg_mask[1] = chip->eg_mask[0];
+            chip->eg_timer_masked[1] = chip->eg_timer_masked[0];
+            chip->eg_subcnt[1] = chip->eg_subcnt[0];
+            chip->eg_load_l1[1] = chip->eg_load_l1[0];
+            chip->eg_timer_dbg[1] = chip->eg_timer_dbg[0];
+        }
+    }
+
+    if (chip->clk1)
+    {
+        static const int eg_stephi[4][4] = {
+            { 0, 0, 0, 0 },
+            { 1, 0, 0, 0 },
+            { 1, 0, 1, 0 },
+            { 1, 1, 1, 0 }
+        };
+
+        int rst = chip->reset1 || (chip->reg_test1 & 32) != 0;
+
+        int state = chip->eg_state_o[3];
+        int dokon = state == eg_state_release && chip->keyon_comb;
+        int rate_sel = dokon ? eg_state_attack : state;
+        int rate = 0;
+        int ksr;
+        if (rate_sel == 0)
+            rate |= chip->ar[1];
+        if (rate_sel == 1)
+            rate |= chip->dr[1];
+        if (rate_sel == 3 || (rate_sel == 2 && !chip->egt[1]))
+            rate |= chip->rr[1];
+
+        int sl = chip->sl[1];
+        if (chip->sl[1] == 15)
+            sl |= 16;
+
+        int ns = chip->reg_notesel ? (chip->fnum[1] & 256) != 0 : (chip->fnum[1] & 512) != 0;
+
+        if (chip->ksr)
+            ksr = (chip->block << 1) | ns;
+        else
+            ksr = chip->block >> 1;
+
+        int rate_hi = rate + (ksr >> 2);
+        if (rate_hi & 16)
+            rate_hi = 15;
+
+        int maxrate = rate_hi == 15;
+
+        int rate12 = rate_hi == 12;
+        int rate13 = rate_hi == 13;
+        int rate14 = rate_hi == 14;
+
+        int inclow = 0;
+
+        if (rate_hi < 12 && rate != 0 && chip->eg_subcnt[1])
+        {
+            int sum = rate_hi + chip->eg_shift;
+            switch (sum)
+            {
+                case 12:
+                    inclow = 1;
+                    break;
+                case 13:
+                    inclow = (ksr & 2) != 0;
+                    break;
+                case 14:
+                    inclow = (ksr & 1) != 0;
+                    break;
+            }
+        }
+
+        int stephi = eg_stephi[chip->ksr & 3][chip->eg_timer_low];
+
+        int step1 = 0;
+        int step2 = 0;
+        int step3 = 0;
+
+        switch (rate_hi)
+        {
+            case 12:
+                step1 = stephi || chip->eg_subcnt[1];
+                break;
+            case 13:
+                if (stephi)
+                    step2 = 1;
+                else
+                    step1 = 1;
+                break;
+            case 14:
+                if (stephi)
+                    step3 = 1;
+                else
+                    step2 = 1;
+                break;
+            case 15:
+                step3 = 1;
+                break;
+        }
+
+        step1 |= inclow;
+
+        int level = chip->eg_level_o[3];
+        int slreach = (level >> 4) == sl;
+        int zeroreach = level == 0;
+        int silent = (level & 0x1f8) == 0x1f8;
+
+        static const int eg_ksltable[16] = {
+            0, 32, 40, 45, 48, 51, 53, 55, 56, 58, 59, 60, 61, 62, 63, 64
+        };
+
+        int nextstate = eg_state_attack;
+
+        if (rst)
+            nextstate = eg_state_release;
+        else if (dokon)
+            nextstate = eg_state_attack;
+        else
+        {
+            if (!chip->keyon_comb)
+                nextstate = eg_state_release;
+            else if (state == eg_state_attack)
+                nextstate = zeroreach ? eg_state_decay : eg_state_attack;
+            else if (state == eg_state_decay)
+                nextstate = slreach ? eg_state_sustain : eg_state_decay;
+            else if (state == eg_state_sustain)
+                nextstate = eg_state_sustain;
+            else if (state == eg_state_release)
+                nextstate = eg_state_release;
+        }
+
+        int linear = !dokon && !silent && ((state & 2) != 0 || (state == eg_state_decay && !slreach));
+        int exponent = state == eg_state_attack && chip->keyon_comb && !maxrate && !zeroreach;
+        int instantattack = (dokon && maxrate) || (chip->reg_test0 & 16) != 0;
+        int mute = rst || (state != eg_state_attack && silent && !dokon && !(chip->reg_test0 & 16));
+
+        int level2 = mute ? 0x1ff : (instantattack ? 0 : level);
+
+        int add = 0;
+        int addshift = 0;
+
+        if (exponent)
+            add |= (level >> 1) ^ 0xff;
+        if (linear)
+            add |= 4;
+
+        if (exponent)
+            addshift |= 256;
+
+        if (step1)
+            addshift |= (add >> 2) | (exponent << 6) | (exponent << 7) | linear;
+        if (step2)
+            addshift |= (add >> 1) | (exponent << 7) | (linear << 1);
+        if (step3)
+            addshift |= (add >> 0) | (linear << 2);
+
+        int levelnext = level2 + addshift;
+
+        int ksl;
+        ksl = eg_ksltable[chip->fnum[1] >> 6];
+
+        ksl += chip->block[1] << 3;
+        if ((ksl & 128) == 0)
+            ksl = 0;
+        else
+            ksl = ksl & 63;
+
+        static int eg_kslshift[4] = {
+            31, 1, 2, 0
+        };
+
+        ksl = (ksl << 2) >> eg_kslshift[chip->ksl[1]];
+
+        int ksltl = ksl + (chip->tl[1] << 2);
+
+        int tremolo;
+
+        if (!chip->am)
+            tremolo = 0;
+        else if (chip->reg_dv)
+            tremolo = chip->trem_out >> 2;
+        else
+            tremolo = chip->trem_out >> 4;
+
+        int ksltltrem = ksltl + tremolo;
+        int levelof = 0;
+
+        if (ksltltrem & 0x200)
+            levelof = 1;
+
+        int totallevel = level + (ksltltrem & 0x1ff);
+        if (totallevel & 0x200)
+            levelof = 1;
+
+        int totallevelclamp = (chip->reg_test0 & 1) != 0 ? 0 : (levelof ? 0x1ff : (totallevel & 0x1ff));
+
+        chip->eg_out[0] = totallevelclamp;
+
+        chip->eg_dbg[0] = chip->eg_dbg[1] >> 1;
+
+        if ((chip->reg_test0 & 32) != 0 && !chip->eg_dbg_load_l[1])
+        {
+            chip->eg_dbg[0] |= chip->eg_out[1];
+        }
+        chip->eg_dbg_load_l[0] = (chip->reg_test0 & 32) != 0;
+
+        if (chip->fsm_out[4] || chip->fsm_out[6])
+            chip->eg_index[0] = 0;
+        else
+            chip->eg_index[0] = chip->eg_index[1] + 1;
+
+        if (chip->eg_index[1] < 18)
+        {
+            int index1 = chip->eg_index[1];
+            int index2 = (index1 + 17) % 18;
+            chip->eg_cells[index2] = nextstate | (levelnext << 2) | (chip->eg_timer_i << 11);
+            chip->eg_cells[index2 + 18] = chip->eg_cells[index1];
+            chip->eg_state_o[0] = chip->eg_cells[18 + index1] & 3;
+            chip->eg_level_o[0] = (chip->eg_cells[18 + index1] >> 2) & 511;
+            chip->eg_timer_o[0] = (chip->eg_cells[18 + index1] >> 11) & 1;
+        }
+        chip->eg_state_o[2] = chip->eg_state_o[1];
+        chip->eg_level_o[2] = chip->eg_level_o[1];
+        chip->eg_timer_o[2] = chip->eg_timer_o[1];
+    }
+    if (chip->clk2)
+    {
+        chip->eg_out[1] = chip->eg_out[0];
+        chip->eg_dbg[1] = chip->eg_dbg[0];
+        chip->eg_dbg_load_l[1] = chip->eg_dbg_load_l[0];
+
+        chip->eg_index[1] = chip->pg_index[0];
+        chip->eg_state_o[1] = chip->eg_state_o[0];
+        chip->eg_state_o[3] = chip->eg_state_o[2];
+        chip->eg_level_o[1] = chip->eg_level_o[0];
+        chip->eg_level_o[3] = chip->eg_level_o[2];
+        chip->eg_timer_o[1] = chip->eg_timer_o[0];
+        chip->eg_timer_o[3] = chip->eg_timer_o[2];
+    }
+
     if (chip->clk1)
     {
         static const int pg_multi[16] = {
@@ -695,7 +1072,10 @@ void FMOPL3_Clock(fmopl3_t *chip)
 
         pg_add = (freq * pg_multi[chip->multi]) >> 1;
 
-        phase = ((chip->eg_dokon || (chip->reg_test0 & 4) != 0 || chip->reset1) ? 0 : chip->pg_phase_o[3]) + pg_add;
+        int state = chip->eg_state_o[3];
+        int dokon = state == eg_state_release && chip->keyon_comb;
+
+        phase = ((dokon || (chip->reg_test0 & 4) != 0 || chip->reset1) ? 0 : chip->pg_phase_o[3]) + pg_add;
 
         if (chip->fsm_out[4] || chip->fsm_out[6])
             chip->pg_index[0] = 0;
@@ -807,6 +1187,378 @@ void FMOPL3_Clock(fmopl3_t *chip)
 
             chip->pg_dbg[1] = chip->pg_dbg[0];
         }
+    }
+
+    {
+
+        if (chip->clk1)
+        {
+            static const int logsin[128] = {
+                0x6c3, 0x58b, 0x4e4, 0x471, 0x41a, 0x3d3, 0x398, 0x365, 0x339, 0x311, 0x2ed, 0x2cd, 0x2af, 0x293, 0x279, 0x261,
+                0x24b, 0x236, 0x222, 0x20f, 0x1fd, 0x1ec, 0x1dc, 0x1cd, 0x1be, 0x1b0, 0x1a2, 0x195, 0x188, 0x17c, 0x171, 0x166,
+                0x15b, 0x150, 0x146, 0x13c, 0x133, 0x129, 0x121, 0x118, 0x10f, 0x107, 0x0ff, 0x0f8, 0x0f0, 0x0e9, 0x0e2, 0x0db,
+                0x0d4, 0x0cd, 0x0c7, 0x0c1, 0x0bb, 0x0b5, 0x0af, 0x0a9, 0x0a4, 0x09f, 0x099, 0x094, 0x08f, 0x08a, 0x086, 0x081,
+                0x07d, 0x078, 0x074, 0x070, 0x06c, 0x068, 0x064, 0x060, 0x05c, 0x059, 0x055, 0x052, 0x04e, 0x04b, 0x048, 0x045,
+                0x042, 0x03f, 0x03c, 0x039, 0x037, 0x034, 0x031, 0x02f, 0x02d, 0x02a, 0x028, 0x026, 0x024, 0x022, 0x020, 0x01e,
+                0x01c, 0x01a, 0x018, 0x017, 0x015, 0x014, 0x012, 0x011, 0x00f, 0x00e, 0x00d, 0x00c, 0x00a, 0x009, 0x008, 0x007,
+                0x007, 0x006, 0x005, 0x004, 0x004, 0x003, 0x002, 0x002, 0x001, 0x001, 0x001, 0x001, 0x000, 0x000, 0x000, 0x000
+            };
+            static const int logsin_d[128] = {
+                0x196, 0x07c, 0x04a, 0x035, 0x029, 0x022, 0x01d, 0x019, 0x015, 0x013, 0x012, 0x00f, 0x00e, 0x00d, 0x00d, 0x00c,
+                0x00b, 0x00a, 0x00a, 0x009, 0x009, 0x009, 0x008, 0x007, 0x007, 0x007, 0x007, 0x006, 0x007, 0x006, 0x006, 0x005,
+                0x005, 0x005, 0x005, 0x005, 0x004, 0x005, 0x004, 0x004, 0x005, 0x004, 0x004, 0x003, 0x004, 0x003, 0x003, 0x003,
+                0x003, 0x004, 0x003, 0x003, 0x003, 0x003, 0x003, 0x003, 0x003, 0x002, 0x003, 0x003, 0x003, 0x003, 0x002, 0x002,
+                0x002, 0x002, 0x002, 0x002, 0x002, 0x002, 0x002, 0x002, 0x002, 0x002, 0x002, 0x001, 0x002, 0x002, 0x002, 0x001,
+                0x001, 0x001, 0x002, 0x002, 0x001, 0x001, 0x002, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001,
+                0x001, 0x001, 0x001, 0x000, 0x001, 0x000, 0x001, 0x000, 0x001, 0x001, 0x000, 0x000, 0x001, 0x001, 0x001, 0x001,
+                0x000, 0x000, 0x000, 0x001, 0x000, 0x000, 0x001, 0x000, 0x001, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000
+            };
+            static const int pow[128] = {
+                0x3f5, 0x3ea, 0x3df, 0x3d4, 0x3c9, 0x3bf, 0x3b4, 0x3a9, 0x39f, 0x394, 0x38a, 0x37f, 0x375, 0x36a, 0x360, 0x356,
+                0x34c, 0x342, 0x338, 0x32e, 0x324, 0x31a, 0x310, 0x306, 0x2fd, 0x2f3, 0x2e9, 0x2e0, 0x2d6, 0x2cd, 0x2c4, 0x2ba,
+                0x2b1, 0x2a8, 0x29e, 0x295, 0x28c, 0x283, 0x27a, 0x271, 0x268, 0x25f, 0x257, 0x24e, 0x245, 0x23c, 0x234, 0x22b,
+                0x223, 0x21a, 0x212, 0x209, 0x201, 0x1f9, 0x1f0, 0x1e8, 0x1e0, 0x1d8, 0x1d0, 0x1c8, 0x1c0, 0x1b8, 0x1b0, 0x1a8,
+                0x1a0, 0x199, 0x191, 0x189, 0x181, 0x17a, 0x172, 0x16b, 0x163, 0x15c, 0x154, 0x14d, 0x146, 0x13e, 0x137, 0x130,
+                0x129, 0x122, 0x11b, 0x114, 0x10c, 0x106, 0x0ff, 0x0f8, 0x0f1, 0x0ea, 0x0e3, 0x0dc, 0x0d6, 0x0cf, 0x0c8, 0x0c2,
+                0x0bb, 0x0b5, 0x0ae, 0x0a8, 0x0a1, 0x09b, 0x094, 0x08e, 0x088, 0x082, 0x07b, 0x075, 0x06f, 0x069, 0x063, 0x05d,
+                0x057, 0x051, 0x04b, 0x045, 0x03f, 0x039, 0x033, 0x02d, 0x028, 0x022, 0x01c, 0x016, 0x011, 0x00b, 0x006, 0x000,
+            };
+            static const int pow_d[128] = {
+                0x005, 0x005, 0x005, 0x006, 0x006, 0x005, 0x005, 0x005, 0x005, 0x005, 0x005, 0x005, 0x005, 0x006, 0x005, 0x005,
+                0x005, 0x005, 0x005, 0x005, 0x005, 0x005, 0x005, 0x005, 0x005, 0x005, 0x005, 0x005, 0x005, 0x005, 0x004, 0x005,
+                0x004, 0x004, 0x005, 0x005, 0x005, 0x005, 0x005, 0x005, 0x005, 0x005, 0x004, 0x004, 0x004, 0x005, 0x004, 0x005,
+                0x004, 0x004, 0x004, 0x005, 0x004, 0x004, 0x005, 0x004, 0x004, 0x004, 0x004, 0x004, 0x004, 0x004, 0x004, 0x004,
+                0x004, 0x003, 0x004, 0x004, 0x004, 0x004, 0x004, 0x004, 0x004, 0x004, 0x004, 0x004, 0x003, 0x004, 0x004, 0x004,
+                0x003, 0x003, 0x003, 0x003, 0x004, 0x003, 0x003, 0x003, 0x003, 0x003, 0x004, 0x004, 0x003, 0x003, 0x004, 0x003,
+                0x003, 0x003, 0x003, 0x003, 0x003, 0x003, 0x004, 0x003, 0x003, 0x003, 0x003, 0x003, 0x003, 0x003, 0x003, 0x003,
+                0x003, 0x003, 0x003, 0x003, 0x003, 0x003, 0x003, 0x003, 0x002, 0x003, 0x003, 0x003, 0x003, 0x003, 0x002, 0x003,
+            };
+            int wf = chip->wf[1];
+            int phase = chip->pg_out_rhy + chip->op_mod[1];
+            int square = wf == 6;
+            int sawtooth = wf == 7;
+
+            int phase2;
+            if (wf == 4 || wf == 5)
+                phase2 = phase << 1;
+            else
+                phase2 = phase;
+            phase2 &= 1023;
+
+            if (wf == 7 ? (phase2 & 512) != 0 : (phase2 & 256) != 0)
+                phase2 ^= 511;
+
+            int mute = ((phase & 512) != 0 && (wf == 1 || wf == 4 || wf == 5)) || ((phase & 256) != 0 && wf == 3);
+            int sign = (wf == 2 || wf == 3 || wf == 5) ? 0 : (phase2 & 512) != 0;
+
+            int index = square ? 255 : (phase2 & 255);
+
+            int ls = logsin[index >> 1];
+            if ((index & 1) == 0)
+                ls += logsin_d[index >> 1];
+
+            chip->op_logsin[0] = ls;
+            chip->op_saw[0] = sawtooth;
+            chip->op_saw_phase[0] = phase2 & 511;
+
+            int att = (chip->op_saw[1] ? (chip->op_saw_phase[1] << 3) : chip->op_logsin[1]) + (chip->eg_out[1] << 3);
+            if (att & 4096)
+                att = 4095;
+
+            int pw = pow[(att >> 1) & 127];
+            if ((att & 1) == 0)
+                pw += pow_d[(att >> 1) & 127];
+
+            chip->op_shift[0] = (att >> 8) & 15;
+            chip->op_pow[0] = pw;
+
+            chip->op_mute[0] = (chip->op_mute[1] << 1) | mute;
+            chip->op_sign[0] = (chip->op_sign[1] << 1) | sign;
+
+            int value = 0;
+
+            if ((chip->op_mute[1] & 2) == 0)
+            {
+                value = ((chip->op_pow[1] | 0x400) << 1) >> chip->op_shift[1];
+            }
+
+            if ((chip->op_mute[1] & 2) == 0 && (chip->op_sign[1] & 2) != 0)
+                value ^= 8191;
+
+            for (i = 0; i < 13; i++)
+            {
+                int bit;
+                chip->op_fb[0][i][0] = chip->op_fb[0][i][1] << 1;
+                if (chip->fsm_out[15])
+                    bit = (value >> i) & 1;
+                else
+                    bit = (chip->op_fb[0][i][1] >> 8) & 1;
+                chip->op_fb[0][i][0] |= bit;
+                chip->op_fb[1][i][0] = chip->op_fb[1][i][1] << 1;
+                if (chip->fsm_out[15])
+                    bit = (chip->op_fb[0][i][1] >> 8) & 1;
+                else
+                    bit = (chip->op_fb[1][i][1] >> 8) & 1;
+                chip->op_fb[1][i][0] |= bit;
+                chip->op_fb[2][i][0] = chip->op_fb[2][i][1] << 1;
+                if (chip->fsm_out[15])
+                    bit = (chip->op_fb[1][i][1] >> 8) & 1;
+                else
+                    bit = (chip->op_fb[2][i][1] >> 8) & 1;
+                chip->op_fb[2][i][0] |= bit;
+                chip->op_fb[3][i][0] = chip->op_fb[3][i][1] << 1;
+                if (chip->fsm_out[15])
+                    bit = (chip->op_fb[2][i][1] >> 8) & 1;
+                else
+                    bit = (chip->op_fb[3][i][1] >> 8) & 1;
+                chip->op_fb[3][i][0] |= bit;
+            }
+
+            int fb1 = 0;
+            int fb2 = 0;
+            for (i = 0; i < 14; i++)
+            {
+                int j = i;
+                if (i == 13)
+                    j = 12;
+                fb1 |= ((chip->op_fb[1][j][1] >> 5) & 1) << i;
+                fb2 |= ((chip->op_fb[3][j][1] >> 5) & 1) << i;
+            }
+            int fb_sum = fb1 + fb2;
+            fb_sum &= 16383;
+            if (fb_sum & 8192)
+                fb_sum |= ~8191;
+
+            int mod = 0;
+
+            if (chip->fsm_out[16] && !chip->fsm_out[14])
+                mod |= value & 1023;
+            if (chip->fsm_out[12])
+            {
+                if (chip->fb_l[1][1])
+                {
+                    mod |= (fb_sum >> (9 - chip->fb_l[1][1])) & 1023;
+                }
+            }
+
+            chip->op_mod[0] = mod & 1023;
+
+            chip->op_value = value;
+        }
+        if (clk2)
+        {
+            chip->op_logsin[1] = chip->op_logsin[0];
+            chip->op_saw[1] = chip->op_saw[0];
+            chip->op_saw_phase[1] = chip->op_saw_phase[0];
+            chip->op_shift[1] = chip->op_shift[0];
+            chip->op_pow[1] = chip->op_pow[0];
+            chip->op_mute[1] = chip->op_mute[0];
+            chip->op_sign[1] = chip->op_sign[0];
+
+            for (i = 0; i < 13; i++)
+            {
+                chip->op_fb[0][i][1] = chip->op_fb[0][i][0];
+                chip->op_fb[1][i][1] = chip->op_fb[1][i][0];
+                chip->op_fb[2][i][1] = chip->op_fb[2][i][0];
+                chip->op_fb[3][i][1] = chip->op_fb[3][i][0];
+            }
+            chip->op_mod[1] = chip->op_mod[0];
+        }
+    }
+
+    {
+        if (chip->clk1)
+        {
+            chip->accm_load_ac_l = chip->fsm_out[6];
+            chip->accm_load_bd_l = chip->fsm_out[4];
+        }
+        chip->accm_load_ac = !chip->accm_load_ac_l && chip->fsm_out[6];
+        chip->accm_load_bd = !chip->accm_load_bd_l && chip->fsm_out[4];
+
+        if (chip->accm_load_ac)
+        {
+            chip->accm_a_sign = (chip->accm_a[1] & 0x40000) == 0;
+            chip->accm_a_of = !((chip->accm_a[1] & 0x78000) == 0 || (chip->accm_a[1] & 0x78000) == 0x78000);
+            chip->accm_c_sign = (chip->accm_c[1] & 0x40000) == 0;
+            chip->accm_c_of = !((chip->accm_c[1] & 0x78000) == 0 || (chip->accm_c[1] & 0x78000) == 0x78000);
+        }
+
+        if (chip->accm_load_bd)
+        {
+            chip->accm_b_sign = (chip->accm_b[1] & 0x40000) == 0;
+            chip->accm_b_of = !((chip->accm_b[1] & 0x78000) == 0 || (chip->accm_b[1] & 0x78000) == 0x78000);
+            chip->accm_d_sign = (chip->accm_d[1] & 0x40000) == 0;
+            chip->accm_d_of = !((chip->accm_d[1] & 0x78000) == 0 || (chip->accm_d[1] & 0x78000) == 0x78000);
+        }
+
+        if (chip->clk1)
+        {
+            int value = 0;
+
+            if (chip->fsm_out[13])
+            {
+                if (chip->fsm_out[11])
+                    value = chip->op_value << 1;
+                else
+                {
+                    value = chip->op_value;
+                    if (chip->op_value & 0x1000)
+                        value |= 0x2000;
+                }
+            }
+            if (value & 0x2000)
+            {
+                value |= 0x7c000;
+            }
+
+            int sign;
+
+            int accm_a = chip->fsm_out[6] ? 0 : chip->accm_a[1];
+            accm_a += (chip->pan_l[1][1] & 1) != 0 ? value;
+            chip->accm_a[0] = accm_a;
+            sign = (chip->accm_a[1] & 0x40000) == 0;
+            chip->accm_shift_a[0] = (chip->accm_shift_a[1] >> 1);
+            if (chip->fsm_out[6])
+            {
+                chip->accm_shift_a[0] |= chip->accm_a[1] & 0x7fff;
+                if (sign)
+                    chip->accm_shift_a[0] |= 0x8000;
+            }
+
+            int accm_b = chip->fsm_out[4] ? 0 : chip->accm_b[1];
+            accm_b += (chip->pan_l[1][1] & 2) != 0 ? value;
+            chip->accm_b[0] = accm_b;
+            sign = (chip->accm_b[1] & 0x40000) == 0;
+            chip->accm_shift_b[0] = (chip->accm_shift_b[1] >> 1);
+            if (chip->fsm_out[4])
+            {
+                chip->accm_shift_b[0] |= chip->accm_b[1] & 0x7fff;
+                if (sign)
+                    chip->accm_shift_b[0] |= 0x8000;
+            }
+
+            int accm_c = chip->fsm_out[6] ? 0 : chip->accm_c[1];
+            accm_c += (chip->pan_l[1][1] & 4) != 0 ? value;
+            chip->accm_c[0] = accm_c;
+            sign = (chip->accm_c[1] & 0x40000) == 0;
+            chip->accm_shift_c[0] = (chip->accm_shift_c[1] >> 1);
+            if (chip->fsm_out[6])
+            {
+                chip->accm_shift_c[0] |= chip->accm_c[1] & 0x7fff;
+                if (sign)
+                    chip->accm_shift_c[0] |= 0x8000;
+            }
+
+            int accm_d = chip->fsm_out[4] ? 0 : chip->accm_d[1];
+            accm_d += (chip->pan_l[1][1] & 8) != 0 ? value;
+            chip->accm_d[0] = accm_d;
+            sign = (chip->accm_d[1] & 0x40000) == 0;
+            chip->accm_shift_d[0] = (chip->accm_shift_d[1] >> 1);
+            if (chip->fsm_out[4])
+            {
+                chip->accm_shift_d[0] |= chip->accm_d[1] & 0x7fff;
+                if (sign)
+                    chip->accm_shift_d[0] |= 0x8000;
+            }
+        }
+        if (chip->clk2)
+        {
+            chip->accm_a[1] = chip->accm_a[0];
+            chip->accm_b[1] = chip->accm_b[0];
+            chip->accm_c[1] = chip->accm_c[0];
+            chip->accm_d[1] = chip->accm_d[0];
+
+            chip->accm_shift_a[1] = chip->accm_shift_a[0];
+            chip->accm_shift_b[1] = chip->accm_shift_b[0];
+            chip->accm_shift_c[1] = chip->accm_shift_c[0];
+            chip->accm_shift_d[1] = chip->accm_shift_d[0];
+        }
+
+        if (chip->fsm_out[8])
+        {
+            chip->o_doab = chip->accm_a_of ? chip->accm_a_sign : chip->accm_shift_a[1] & 1;
+            chip->o_docd = chip->accm_c_of ? chip->accm_c_sign : chip->accm_shift_c[1] & 1;
+        }
+        else
+        {
+            chip->o_doab = chip->accm_b_of ? chip->accm_b_sign : chip->accm_shift_b[1] & 1;
+            chip->o_docd = chip->accm_d_of ? chip->accm_d_sign : chip->accm_shift_d[1] & 1;
+        }
+    }
+
+    chip->o_sy = chip->clk2;
+    chip->o_smpac = chip->fsm_out[10];
+    chip->o_smpbd = chip->fsm_out[9];
+    chip->o_irq_pull = chip->t1_status || chip->t2_status;
+
+    if (chip->io_read)
+    {
+        chip->data_o = 0;
+        if (chip->t1_status || chip->t2_status)
+            chip->data_o |= 128;
+        if (chip->t1_status)
+            chip->data_o |= 64;
+        if (chip->t2_status)
+            chip->data_o |= 32;
+        chip->data_z = 0;
+    }
+    else
+        chip->data_z = 1;
+
+    {
+        if (chip->clk1)
+        {
+            chip->ra_dbg1[0] = chip->ra_dbg1[1] >> 1;
+            chip->ra_dbg2[0] = chip->ra_dbg2[1] >> 1;
+            if ((chip->reg_test0 & 128) != 0 && !chip->ra_dbg1_load[1])
+            {
+                chip->ra_dbg1[0] |= (int64_t)chip->multi[1] << 0;
+                chip->ra_dbg1[0] |= (int64_t)chip->ksr[1] << 4;
+                chip->ra_dbg1[0] |= (int64_t)chip->egt[1] << 5;
+                chip->ra_dbg1[0] |= (int64_t)chip->vib[1] << 6;
+                chip->ra_dbg1[0] |= (int64_t)chip->am[1] << 7;
+                chip->ra_dbg1[0] |= (int64_t)chip->tl[1] << 8;
+                chip->ra_dbg1[0] |= (int64_t)chip->ksl[1] << 14;
+                chip->ra_dbg1[0] |= (int64_t)chip->dr[1] << 16;
+                chip->ra_dbg1[0] |= (int64_t)chip->ar[1] << 20;
+                chip->ra_dbg1[0] |= (int64_t)chip->rr[1] << 24;
+                chip->ra_dbg1[0] |= (int64_t)chip->sl[1] << 28;
+                chip->ra_dbg1[0] |= (int64_t)chip->wf[1] << 32;
+                chip->ra_dbg2[0] |= (int64_t)chip->fnum[1] << 0;
+                chip->ra_dbg2[0] |= (int64_t)chip->block[1] << 10;
+                chip->ra_dbg2[0] |= (int64_t)chip->keyon[1] << 13;
+                chip->ra_dbg2[0] |= (int64_t)chip->connect[1] << 14;
+                chip->ra_dbg2[0] |= (int64_t)chip->pan[1] << 15;
+                chip->ra_dbg2[0] |= (int64_t)chip->connect_pair[1] << 19;
+                chip->ra_dbg2[0] |= (int64_t)chip->fb[1] << 20;
+            }
+            chip->ra_dbg_load[0] = (chip->reg_test0 & 128) != 0;
+        }
+        if (chip->clk2)
+        {
+            chip->ra_dbg1[1] = chip->ra_dbg1[0];
+            chip->ra_dbg2[1] = chip->ra_dbg2[0];
+            chip->ra_dbg_load[1] = chip->ra_dbg_load[0];
+        }
+    }
+
+    switch (chip->reg_test1 & 7)
+    {
+        case 0:
+            chip->o_test = 0;
+            break;
+        case 1:
+            chip->o_test = (chip->ra_dbg1[1] & 1) != 0;
+            break;
+        case 2:
+            chip->o_test = (chip->ra_dbg2[1] & 1) != 0;
+            break;
+        case 3:
+            chip->o_test = (chip->pg_dbg[1] & 1) != 0;
+            break;
+        case 4:
+            chip->o_test = (chip->eg_dbg[1] & 1) != 0;
+            break;
     }
 
 end:
