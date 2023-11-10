@@ -173,7 +173,7 @@ void FMOPL3_Clock(fmopl3_t *chip)
         }
         if (chip->reg_sel1 && bank_masked)
             chip->reg_test1 = chip->data_latch & 255;
-        if (chip->reg_sel1 && bank_masked)
+        if (chip->reg_sel4 && bank_masked)
             chip->reg_4op = chip->data_latch & 63;
     }
     int reg_sel4_wr = chip->write1 && chip->reg_sel4 && !bank_masked && (chip->data_latch & 128) == 0;
@@ -575,6 +575,7 @@ void FMOPL3_Clock(fmopl3_t *chip)
             chip->fsm_l7[1] = chip->fsm_l7[0];
             chip->fsm_l8[1] = chip->fsm_l8[0];
             chip->fsm_l9[1] = chip->fsm_l9[0];
+            chip->fsm_l10[1] = chip->fsm_l10[0];
         }
         {
             chip->fsm_out[0] = chip->fsm_l1[1]; // 0
