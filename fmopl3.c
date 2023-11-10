@@ -74,6 +74,17 @@ void FMOPL3_Clock(fmopl3_t *chip)
     chip->rclk1 = chip->prescaler2_l6[1];
     chip->rclk2 = chip->prescaler2_l5[1];
 
+    if (chip->aclk1)
+    {
+
+        int ga = (chip->data_latch & 0xe0) != 0;
+
+        int write0 = ga && chip->write0 && (chip->reg_test1 & 16) != 0;
+        int write = chip->write1 || write0;
+
+            chip->ra_w1_l1 = write;
+    }
+
     if (chip->clk2)
     {
         chip->write0_l[1] = chip->write0_l[0];
@@ -86,26 +97,20 @@ void FMOPL3_Clock(fmopl3_t *chip)
         chip->write1 = chip->write1_l[3] && !chip->write1_l[1];
     }
 
-    if (chip->io_write0)
-        chip->write0_sr = 1;
-    else if (chip->reset0 || chip->write0_l[1])
-        chip->write0_sr = 0;
-
-    if (chip->io_write1)
-        chip->write1_sr = 1;
-    else if (chip->reset0 || chip->write1_l[1])
-        chip->write1_sr = 0;
-
-    if (chip->clk1)
-    {
-        chip->write0_l[0] = chip->write0_l;
-        chip->write0_l[2] = chip->write0_l[1];
-
-        chip->write1_l[0] = chip->write1_l;
-        chip->write1_l[2] = chip->write1_l[1];
-    }
-
     //////////////////////
+
+    //if (chip->o_clk1 == chip->clk1 && chip->o_clk2 == chip->clk2 && chip->o_rclk1 == chip->rclk1 && chip->o_rclk2 == chip->rclk2 && chip->o_reset0 == chip->reset0
+    //    && chip->o_ra_w1_l1 == chip->ra_w1_l1 && chip->o_bank_latch == chip->bank_latch && chip->o_data_latch == chip->data_latch)
+    //    goto end; // opt
+
+    chip->o_clk1 = chip->clk1;
+    chip->o_clk2 = chip->clk2;
+    chip->o_rclk1 = chip->rclk1;
+    chip->o_rclk2 = chip->rclk2;
+    chip->o_reset0 = chip->reset0;
+    chip->o_data_latch = chip->data_latch;
+    chip->o_bank_latch = chip->bank_latch;
+    chip->o_ra_w1_l1 = chip->ra_w1_l1;
 
     if (chip->reset0)
     {
@@ -243,7 +248,7 @@ void FMOPL3_Clock(fmopl3_t *chip)
             if (rst || of4 || of1)
                 chip->ra_cnt4[0] = 0;
             else
-                chip->ra_cnt4[0] = (chip->ra_cnt1[4] + 1) & 3;
+                chip->ra_cnt4[0] = (chip->ra_cnt4[1] + 1) & 3;
 
         }
         if (chip->clk2)
@@ -325,6 +330,7 @@ void FMOPL3_Clock(fmopl3_t *chip)
             int ch_address_mapped = (ch_address_write & 1) + (add & 1);
             ch_address_mapped |= add & 2;
             ch_address_mapped += ch_address_write & 14;
+            ch_address_mapped &= 15;
             ch_address_mapped |= bank << 4;
             int ch_address_mapped2 = ch_address_mapped & 3;
             if ((ch_address_mapped & 12) == 8)
@@ -392,7 +398,7 @@ void FMOPL3_Clock(fmopl3_t *chip)
                 if ((chip->ra_address_latch & 0xf0) == 0xa0 || write0 || chip->reset1)
                 {
                     chip->ra_fnum[idx2] &= 0x300;
-                    chip->ra_fnum[idx2] |= chip->ra_data_latch;
+                    chip->ra_fnum[idx2] |= chip->ra_data_latch & 0xff;
                 }
                 if ((chip->ra_address_latch & 0xf0) == 0xb0 || write0 || chip->reset1)
                 {
@@ -428,18 +434,18 @@ void FMOPL3_Clock(fmopl3_t *chip)
                     chip->rr[0] = chip->ra_rr[idx];
                     chip->wf[0] = chip->ra_wf[idx];
                 }
-                if (idx1 != 0)
+                if (idx1 != -1)
                 {
                     chip->connect[0] = chip->ra_connect[idx1];
                     chip->pan[0] = chip->ra_pan[idx1];
                 }
-                if (idx2 != 0)
+                if (idx2 != -1)
                 {
                     chip->fnum[0] = chip->ra_fnum[idx2];
                     chip->block[0] = chip->ra_block[idx2];
                     chip->keyon[0] = chip->ra_keyon[idx2];
                 }
-                if (idx3 != 0)
+                if (idx3 != -1)
                 {
                     chip->connect_pair[0] = chip->ra_connect_pair[idx3];
                     chip->fb[0] = chip->ra_fb[idx3];
@@ -794,7 +800,6 @@ void FMOPL3_Clock(fmopl3_t *chip)
         }
         if (chip->clk2)
         {
-            chip->eg_timer[1] = chip->eg_timer[0];
             chip->eg_carry[1] = chip->eg_carry[0];
             chip->eg_sync_l[1] = chip->eg_sync_l[0];
             chip->eg_mask[1] = chip->eg_mask[0];
@@ -834,10 +839,10 @@ void FMOPL3_Clock(fmopl3_t *chip)
 
         int ns = chip->reg_notesel ? (chip->fnum[1] & 256) != 0 : (chip->fnum[1] & 512) != 0;
 
-        if (chip->ksr)
-            ksr = (chip->block << 1) | ns;
+        if (chip->ksr[1])
+            ksr = (chip->block[1] << 1) | ns;
         else
-            ksr = chip->block >> 1;
+            ksr = chip->block[1] >> 1;
 
         int rate_hi = rate + (ksr >> 2);
         if (rate_hi & 16)
@@ -868,7 +873,7 @@ void FMOPL3_Clock(fmopl3_t *chip)
             }
         }
 
-        int stephi = eg_stephi[chip->ksr & 3][chip->eg_timer_low];
+        int stephi = eg_stephi[chip->ksr[1] & 3][chip->eg_timer_low];
 
         int step1 = 0;
         int step2 = 0;
@@ -942,7 +947,7 @@ void FMOPL3_Clock(fmopl3_t *chip)
         if (linear)
             add |= 4;
 
-        if (exponent)
+        if (exponent && (step1 || step2 || step3))
             addshift |= 256;
 
         if (step1)
@@ -956,12 +961,13 @@ void FMOPL3_Clock(fmopl3_t *chip)
 
         int ksl;
         ksl = eg_ksltable[chip->fnum[1] >> 6];
+        int ksl_hi = (ksl & 64) != 0;
 
-        ksl += chip->block[1] << 3;
-        if ((ksl & 128) == 0)
-            ksl = 0;
-        else
+        ksl = (ksl & 63) + (chip->block[1] << 3);
+        if (ksl_hi || (ksl & 64) != 0)
             ksl = ksl & 63;
+        else
+            ksl = 0;
 
         static int eg_kslshift[4] = {
             31, 1, 2, 0
@@ -973,7 +979,7 @@ void FMOPL3_Clock(fmopl3_t *chip)
 
         int tremolo;
 
-        if (!chip->am)
+        if (!chip->am[1])
             tremolo = 0;
         else if (chip->reg_dv)
             tremolo = chip->trem_out >> 2;
@@ -1011,7 +1017,7 @@ void FMOPL3_Clock(fmopl3_t *chip)
         {
             int index1 = chip->eg_index[1];
             int index2 = (index1 + 17) % 18;
-            chip->eg_cells[index2] = nextstate | (levelnext << 2) | (chip->eg_timer_i << 11);
+            chip->eg_cells[index2] = (nextstate & 3) | ((levelnext & 511) << 2) | (chip->eg_timer_i << 11);
             chip->eg_cells[index2 + 18] = chip->eg_cells[index1];
             chip->eg_state_o[0] = chip->eg_cells[18 + index1] & 3;
             chip->eg_level_o[0] = (chip->eg_cells[18 + index1] >> 2) & 511;
@@ -1027,7 +1033,7 @@ void FMOPL3_Clock(fmopl3_t *chip)
         chip->eg_dbg[1] = chip->eg_dbg[0];
         chip->eg_dbg_load_l[1] = chip->eg_dbg_load_l[0];
 
-        chip->eg_index[1] = chip->pg_index[0];
+        chip->eg_index[1] = chip->eg_index[0];
         chip->eg_state_o[1] = chip->eg_state_o[0];
         chip->eg_state_o[3] = chip->eg_state_o[2];
         chip->eg_level_o[1] = chip->eg_level_o[0];
@@ -1070,7 +1076,7 @@ void FMOPL3_Clock(fmopl3_t *chip)
 
         freq = (fnum << chip->block[1]) >> 1;
 
-        pg_add = (freq * pg_multi[chip->multi]) >> 1;
+        pg_add = (freq * pg_multi[chip->multi[1]]) >> 1;
 
         int state = chip->eg_state_o[3];
         int dokon = state == eg_state_release && chip->keyon_comb;
@@ -1154,7 +1160,7 @@ void FMOPL3_Clock(fmopl3_t *chip)
 
             chip->pg_out_rhy = 0;
             if (!rhy)
-                chip->pg_out_rhy |= chip->pg_out;
+                chip->pg_out_rhy |= pg_out;
             if (hh)
             {
                 chip->pg_out_rhy |= rm_bit << 9;
@@ -1345,7 +1351,7 @@ void FMOPL3_Clock(fmopl3_t *chip)
 
             chip->op_value = value;
         }
-        if (clk2)
+        if (chip->clk2)
         {
             chip->op_logsin[1] = chip->op_logsin[0];
             chip->op_saw[1] = chip->op_saw[0];
@@ -1414,7 +1420,7 @@ void FMOPL3_Clock(fmopl3_t *chip)
             int sign;
 
             int accm_a = chip->fsm_out[6] ? 0 : chip->accm_a[1];
-            accm_a += (chip->pan_l[1][1] & 1) != 0 ? value;
+            accm_a += (chip->pan_l[1][1] & 1) != 0 ? value : 0;
             chip->accm_a[0] = accm_a;
             sign = (chip->accm_a[1] & 0x40000) == 0;
             chip->accm_shift_a[0] = (chip->accm_shift_a[1] >> 1);
@@ -1426,7 +1432,7 @@ void FMOPL3_Clock(fmopl3_t *chip)
             }
 
             int accm_b = chip->fsm_out[4] ? 0 : chip->accm_b[1];
-            accm_b += (chip->pan_l[1][1] & 2) != 0 ? value;
+            accm_b += (chip->pan_l[1][1] & 2) != 0 ? value : 0;
             chip->accm_b[0] = accm_b;
             sign = (chip->accm_b[1] & 0x40000) == 0;
             chip->accm_shift_b[0] = (chip->accm_shift_b[1] >> 1);
@@ -1438,7 +1444,7 @@ void FMOPL3_Clock(fmopl3_t *chip)
             }
 
             int accm_c = chip->fsm_out[6] ? 0 : chip->accm_c[1];
-            accm_c += (chip->pan_l[1][1] & 4) != 0 ? value;
+            accm_c += (chip->pan_l[1][1] & 4) != 0 ? value : 0;
             chip->accm_c[0] = accm_c;
             sign = (chip->accm_c[1] & 0x40000) == 0;
             chip->accm_shift_c[0] = (chip->accm_shift_c[1] >> 1);
@@ -1450,7 +1456,7 @@ void FMOPL3_Clock(fmopl3_t *chip)
             }
 
             int accm_d = chip->fsm_out[4] ? 0 : chip->accm_d[1];
-            accm_d += (chip->pan_l[1][1] & 8) != 0 ? value;
+            accm_d += (chip->pan_l[1][1] & 8) != 0 ? value : 0;
             chip->accm_d[0] = accm_d;
             sign = (chip->accm_d[1] & 0x40000) == 0;
             chip->accm_shift_d[0] = (chip->accm_shift_d[1] >> 1);
@@ -1510,7 +1516,7 @@ void FMOPL3_Clock(fmopl3_t *chip)
         {
             chip->ra_dbg1[0] = chip->ra_dbg1[1] >> 1;
             chip->ra_dbg2[0] = chip->ra_dbg2[1] >> 1;
-            if ((chip->reg_test0 & 128) != 0 && !chip->ra_dbg1_load[1])
+            if ((chip->reg_test0 & 128) != 0 && !chip->ra_dbg_load[1])
             {
                 chip->ra_dbg1[0] |= (int64_t)chip->multi[1] << 0;
                 chip->ra_dbg1[0] |= (int64_t)chip->ksr[1] << 4;
@@ -1562,6 +1568,25 @@ void FMOPL3_Clock(fmopl3_t *chip)
     }
 
 end:
+
+    if (chip->io_write0)
+        chip->write0_sr = 1;
+    else if (chip->reset0 || chip->write0_l[1])
+        chip->write0_sr = 0;
+
+    if (chip->io_write1)
+        chip->write1_sr = 1;
+    else if (chip->reset0 || chip->write1_l[1])
+        chip->write1_sr = 0;
+
+    if (chip->clk1)
+    {
+        chip->write0_l[0] = chip->write0_sr;
+        chip->write0_l[2] = chip->write0_l[1];
+
+        chip->write1_l[0] = chip->write1_sr;
+        chip->write1_l[2] = chip->write1_l[1];
+    }
 
     if (chip->mclk1)
     {

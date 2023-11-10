@@ -26,6 +26,16 @@ typedef struct
     int rclk1;
     int rclk2;
 
+    int o_clk1;
+    int o_clk2;
+    int o_rclk1;
+    int o_rclk2;
+    int o_wrcheck;
+    int o_data_latch;
+    int o_bank_latch;
+    int o_reset0;
+    int o_ra_w1_l1;
+
     int prescaler1_reset[2];
     int prescaler1_cnt[2];
 
@@ -201,7 +211,7 @@ typedef struct
     int reset0;
     int reset1;
 
-    int pg_phase_o[3];
+    int pg_phase_o[4];
     int pg_dbg[2];
     int pg_dbg_load_l[2];
     int noise_lfsr[2];
@@ -262,6 +272,7 @@ typedef struct
     int op_mute[2];
     int op_sign[2];
     int op_fb[4][13][2];
+    int op_mod[2];
 
     int op_value;
 
