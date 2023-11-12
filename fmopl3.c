@@ -881,7 +881,7 @@ void FMOPL3_Clock(fmopl3_t *chip)
 
         if (rate_hi < 12 && rate != 0 && chip->eg_subcnt[1])
         {
-            int sum = rate_hi + chip->eg_shift;
+            int sum = (rate_hi + chip->eg_shift) & 15;
             switch (sum)
             {
                 case 12:
@@ -896,7 +896,7 @@ void FMOPL3_Clock(fmopl3_t *chip)
             }
         }
 
-        int stephi = eg_stephi[chip->ksr[1] & 3][chip->eg_timer_low];
+        int stephi = eg_stephi[ksr & 3][chip->eg_timer_low];
 
         int step1 = 0;
         int step2 = 0;
